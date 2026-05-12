@@ -51,9 +51,8 @@ def get_twse_data(date_obj):
     df['市場'] = '上市'
     return df
 
-# --- 2. 抓取上櫃 (TPEx) 邏輯 (政府 OpenAPI 穩定版) ---
+# --- 2. 抓取上櫃 (TPEx) 邏輯 (政府 OpenAPI 防彈容錯版) ---
 def get_tpex_data():
-    # 改用政府開放資料 OpenAPI，永遠自動回傳最新一個交易日的收盤行情
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -65,20 +64,34 @@ def get_tpex_data():
             return pd.DataFrame(columns=['證券代號', '證券名稱', '收盤價', '成交股數', '市場'])
             
         df = pd.DataFrame(data)
-        
-        # OpenAPI 的欄位名稱為英文，我們將其重新對應
         df_tpex = pd.DataFrame()
-        df_tpex['證券代號'] = df['SecuritiesCompanyCode']
-        df_tpex['證券名稱'] = df['CompanyName']
-        df_tpex['收盤價'] = df['Close']
-        df_tpex['成交股數'] = df['TradingVolume']
+        
+        # 【防彈機制 1】使用 df.get()：即使政府改了欄位名稱，也不會報錯，只會回傳空白
+        df_tpex['證券代號'] = df.get('SecuritiesCompanyCode', df.get('Code', ''))
+        df_tpex['證券名稱'] = df.get('CompanyName', df.get('Name', ''))
+        df_tpex['收盤價'] = df.get('Close', df.get('ClosePrice', '0'))
+        
+        # 【防彈機制 2】多重探測成交量欄位：如果 A 不在，就找 B，最後補 0
+        if 'TradingVolume' in df.columns:
+            df_tpex['成交股數'] = df['TradingVolume']
+        elif 'TradingShares' in df.columns:
+            df_tpex['成交股數'] = df['TradingShares']
+        elif 'TradeVolume' in df.columns:
+            df_tpex['成交股數'] = df['TradeVolume']
+        else:
+            df_tpex['成交股數'] = '0'  # 找不到量也沒關係，保證程式繼續活著
+            
         df_tpex['市場'] = '上櫃'
         
         return df_tpex
+        
     except Exception as e:
         st.error(f"❌ 上櫃 OpenAPI 資料取得失敗：{e}")
+        # 如果真的出錯，顯示出政府現在到底給了什麼欄位，方便我們未來除錯
+        if 'df' in locals():
+            st.warning(f"目前政府 API 實際提供的欄位有：{list(df.columns)}")
         return pd.DataFrame(columns=['證券代號', '證券名稱', '收盤價', '成交股數', '市場'])
-
+        
 # --- 分類邏輯函數 ---
 def classify_stock(price):
     if pd.isna(price):
