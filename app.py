@@ -51,31 +51,47 @@ def get_twse_data(date_obj):
     df['市場'] = '上市' # 加上市場標籤
     return df
 
-# --- 2. 抓取上櫃 (TPEx) 邏輯 ---
+# --- 2. 抓取上櫃 (TPEx) 邏輯 (終極強化版) ---
 def get_tpex_data(date_obj):
     # 櫃買中心的日期格式要求為「民國年/月/日」
     tpex_year = date_obj.year - 1911
     tpex_date_str = f"{tpex_year}/{date_obj.strftime('%m/%d')}"
-    url = f"https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&d={tpex_date_str}"
+    
+    # 【關鍵修復 1】網址必須加入 &o=json 才能正確取得數據
+    url = f"https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json&d={tpex_date_str}"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        res = requests.get(url, headers=headers, verify=False)
-        data = res.json()
+        res = requests.get(url, headers=headers, verify=False, timeout=10)
         
-        # 櫃買的資料存放在 'aaData' 陣列中
+        # 【關鍵修復 2】攔截非 JSON 格式的錯誤
+        try:
+            data = res.json()
+        except:
+            st.error("❌ 上櫃資料解析失敗：櫃買中心未回傳標準格式，可能 API 正在維護中。")
+            return pd.DataFrame()
+        
+        # 如果當天沒有資料 (例如假日)
         if 'aaData' not in data or not data['aaData']:
-            return pd.DataFrame(columns=['證券代號', '證券名稱', '收盤價', '成交股數'])
+            return pd.DataFrame()
             
         df = pd.DataFrame(data['aaData'])
         
-        # 櫃買 aaData 的欄位索引： 0:代號, 1:名稱, 2:收盤價, 8:成交股數
-        df_tpex = df[[0, 1, 2, 8]].copy()
-        df_tpex.columns = ['證券代號', '證券名稱', '收盤價', '成交股數']
-        df_tpex['市場'] = '上櫃' # 加上市場標籤
+        # 【關鍵修復 3】精準提取欄位，防範未來櫃買中心偷改欄位數量
+        df_tpex = pd.DataFrame()
+        df_tpex['證券代號'] = df[0]
+        df_tpex['證券名稱'] = df[1]
+        df_tpex['收盤價'] = df[2]
+        # 若成交股數(第8欄)存在則抓取，否則補0避免當機
+        df_tpex['成交股數'] = df[8] if df.shape[1] > 8 else '0' 
+        df_tpex['市場'] = '上櫃'
+        
         return df_tpex
-    except:
-        return pd.DataFrame(columns=['證券代號', '證券名稱', '收盤價', '成交股數'])
+        
+    except Exception as e:
+        # 【關鍵修復 4】把連線錯誤直接顯示在儀表板上，不再靜默失敗！
+        st.error(f"❌ 上櫃伺服器連線異常：{e}")
+        return pd.DataFrame()
 
 # --- 分類邏輯函數 ---
 def classify_stock(price):
